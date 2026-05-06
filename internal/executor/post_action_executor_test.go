@@ -661,6 +661,89 @@ func TestExecuteAPICall(t *testing.T) {
 	}
 }
 
+func TestPostActionWhenCondition(t *testing.T) {
+	tests := []struct { //nolint:govet // fieldalignment: string+pointer pair cannot be reduced below 24 pointer bytes
+		name             string
+		when             *configloader.PostActionWhen
+		wantSkipped      bool
+		wantAPICall      bool
+		wantErr          bool
+		resourcesSkipped bool
+	}{
+		{
+			name:        "no when condition — action always executes",
+			when:        nil,
+			wantSkipped: false,
+			wantAPICall: true,
+		},
+		{
+			name:        "when expression true — action executes",
+			when:        &configloader.PostActionWhen{Expression: "!adapter.resourcesSkipped"},
+			wantSkipped: false,
+			wantAPICall: true,
+		},
+		{
+			name:             "when expression false — action skipped",
+			when:             &configloader.PostActionWhen{Expression: "!adapter.resourcesSkipped"},
+			resourcesSkipped: true,
+			wantSkipped:      true,
+			wantAPICall:      false,
+		},
+		{
+			name:        "when expression literal false — action skipped",
+			when:        &configloader.PostActionWhen{Expression: "false"},
+			wantSkipped: true,
+			wantAPICall: false,
+		},
+		{
+			name:    "when expression parse error — returns error",
+			when:    &configloader.PostActionWhen{Expression: "=== invalid ==="},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := hyperfleetapi.NewMockClient()
+			mockClient.DoResponse = &hyperfleetapi.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Body:       []byte(`{}`),
+			}
+
+			pae := newPostActionExecutor(&ExecutorConfig{
+				APIClient: mockClient,
+				Logger:    logger.NewTestLogger(),
+			})
+
+			action := configloader.PostAction{
+				ActionBase: configloader.ActionBase{
+					Name: "testAction",
+					APICall: &configloader.APICall{
+						Method: "POST",
+						URL:    "http://api.example.com/statuses",
+					},
+				},
+				When: tt.when,
+			}
+
+			execCtx := NewExecutionContext(context.Background(), map[string]interface{}{}, nil)
+			execCtx.Adapter.ResourcesSkipped = tt.resourcesSkipped
+
+			result, err := pae.executePostAction(context.Background(), action, execCtx)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantSkipped, result.Skipped)
+			assert.Equal(t, tt.wantAPICall, result.APICallMade)
+		})
+	}
+}
+
 func TestBuildPostPayloads_WithResourceDiscoveryCELHelpers(t *testing.T) {
 	pae := testPAE()
 	execCtx := NewExecutionContext(context.Background(), map[string]interface{}{}, nil)

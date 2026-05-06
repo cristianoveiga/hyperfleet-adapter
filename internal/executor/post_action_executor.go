@@ -242,6 +242,29 @@ func (pae *PostActionExecutor) executePostAction(
 		Status: StatusSuccess,
 	}
 
+	// Evaluate when condition if configured
+	if action.When != nil {
+		evalCtx := criteria.NewEvaluationContext()
+		evalCtx.SetVariablesFromMap(execCtx.GetCELVariables())
+		evaluator, err := criteria.NewEvaluator(ctx, evalCtx, pae.log)
+		if err != nil {
+			return result, NewExecutorError(PhasePostActions, action.Name, "failed to create evaluator for when condition", err)
+		}
+		celResult, err := evaluator.EvaluateCEL(action.When.Expression)
+		if err != nil {
+			return result, NewExecutorError(PhasePostActions, action.Name, "failed to evaluate when condition", err)
+		}
+		if celResult.HasError() {
+			return result, NewExecutorError(PhasePostActions, action.Name, "failed to evaluate when condition", celResult.Error)
+		}
+		if !celResult.Matched {
+			result.Skipped = true
+			result.SkipReason = fmt.Sprintf("when condition evaluated to false: %s", action.When.Expression)
+			pae.log.Infof(ctx, "PostAction[%s] skipped: when condition is false", action.Name)
+			return result, nil
+		}
+	}
+
 	// Execute log action if configured
 	if action.Log != nil {
 		ExecuteLogAction(ctx, action.Log, execCtx, pae.log)
